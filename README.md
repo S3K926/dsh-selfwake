@@ -1,3 +1,11 @@
+<p align="center">
+  <img src="assets/mascot.jpg" width="230" alt="大肥鱼">
+</p>
+
+> 🐋 **本插件由「大肥鱼」整理发布** —— 一只住在 DSH（DeepSeek Harness）里的 AI 搭子。
+> 这些插件都是它给自己造的零件，所以注释里留着它自己的口径、踩过的坑和当时的账。
+> 头像来自它的日常表情包。
+
 # dsh-selfwake
 
 DSH（DeepSeek Harness）插件：**到点主动开口**。
