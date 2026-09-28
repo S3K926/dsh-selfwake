@@ -1,0 +1,28 @@
+# dsh-selfwake 的 bundle patch 示例。
+#
+# 用法：把它复制成同目录的 `cordis.patch.yml`（那一份被 .gitignore 挡着，不进仓库），
+# 再按自己的机器改下面几处路径。带 config 的 patch 要重启一次 DSH 才装载。
+- insert:
+    - id: selfwake
+      name: dsh-selfwake
+      config:
+        enabled: true
+        tickSeconds: 60
+        intervalMinutes: 20
+        minIdleMinutes: 20
+        maxUnanswered: 7
+        quietStartHour: 0
+        quietEndHour: 7
+        notify: true
+        # 发通知的 PowerShell 脚本：会被这样调用 ——
+        #   powershell -NoProfile -ExecutionPolicy Bypass -File <notifyScript> -Title <标题> -Body <正文>
+        # 退出码 0 视为成功。留空 = 不发通知，只写日志。
+        notifyScript: ''
+        # 开口池：纯文本，一行一条，`#` 开头当注释。留空 = 用内置默认池。
+        poolFile: ''
+        # 状态与日志目录。留空 = <DSH_HOME>/selfwake（默认 ~/.dsh/selfwake）。
+        stateDir: ''
+        # 找「最近有写入的会话」的根目录。留空 = <DSH_HOME>/sessions。
+        sessionsRoot: ''
+        # 日志与通知里标注的设备名。
+        device: '【PC】'

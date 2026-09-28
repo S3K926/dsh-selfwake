@@ -1,0 +1,14 @@
+# 依赖与运行时产物
+node_modules/
+*.log
+*.tmp
+state.json
+config.json
+
+# 本机配置（含真实路径）—— 仓库里给的是 cordis.patch.example.yml
+cordis.patch.yml
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+desktop.ini
