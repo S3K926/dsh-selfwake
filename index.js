@@ -18,8 +18,8 @@
  * 自检口 `node index.js --selftest` 放在模块层（独立跑时 cordis 不调 apply，写在里面等于死代码）。
  */
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { homedir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 
 export const name = 'selfwake';
@@ -160,7 +160,6 @@ export function evaluateGates(now, cfg, state, lastActivityMs) {
 /** 发风铃通知（走我们验通的脚本；失败只记日志，不抛）。 */
 function sendNotify(cfg, title, body) {
   if (!cfg.notify) return { ok: false, why: '配置里关掉了通知' };
-  const script = cfg.notifyScript || join(homedir(), 'Desktop');
   const target = cfg.notifyScript;
   if (!target || !existsSync(target)) return { ok: false, why: '没配 notifyScript（找不到发通知脚本）' };
   const r = spawnSync(
@@ -169,7 +168,6 @@ function sendNotify(cfg, title, body) {
     { windowsHide: true, timeout: 20_000 },
   );
   return { ok: r.status === 0, why: r.status === 0 ? '' : `退出码 ${r.status}` };
-  void script;
 }
 
 /**

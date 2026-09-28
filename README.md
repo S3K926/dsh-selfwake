@@ -52,10 +52,13 @@ dsh plugin --profile web add /path/to/dsh-selfwake
 | `quietEndHour` | `7` | 静默时段止（不含） |
 | `notify` | `true` | 投不进会话时是否发系统通知 |
 | `notifyScript` | `''` | 发通知的脚本路径，见下 |
-| `stateDir` | `~/.dsh/selfwake` | 状态与日志目录 |
+| `stateDir` | `$DSH_HOME/selfwake`（无 `DSH_HOME` 时 `~/.dsh/selfwake`） | 状态与日志目录 |
 | `poolFile` | `''` | 开口池文件 |
-| `sessionsRoot` | `~/.dsh/sessions` 之类 | 找"最近活跃会话"的根目录 |
+| `sessionsRoot` | `$DSH_HOME/sessions` 之类 | 找"最近活跃会话"的根目录 |
 | `device` | `【PC】` | 日志与通知里标注的设备名 |
+
+> 家目录一律按 `$DSH_HOME` → `~/.dsh` 的顺序解析：便携部署 / 多实例 / U 盘随身版会设 `DSH_HOME`，
+> 状态就不会漏到宿主机的 `~/.dsh` 里。
 
 ## 通知脚本约定
 
