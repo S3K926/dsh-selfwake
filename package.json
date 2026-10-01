@@ -1,10 +1,13 @@
 {
   "name": "dsh-selfwake",
   "version": "0.1.0",
-  "description": "DSH 插件：到点主动开口 —— 四道闸（间隔／安静／未回话上限／静默时段）过了就挑一条开口，优先投进活跃会话，投不进发系统通知 ＋ 写日志。",
+  "description": "DSH 插件：到点主动开口 —— 五道闸（随机间隔／安静／未回上限／静默时段／每日上限）过了就注入「状态＋约束」，话由模型当场说；支持一个回合分几次发",
   "type": "module",
   "main": "index.js",
   "license": "MIT",
+  "dependencies": {
+    "@deepseek-ai/dsh-session": "^0.2.0-rc.1"
+  },
   "keywords": [
     "dsh",
     "deepseek-harness",
@@ -21,6 +24,7 @@
     "index.js",
     "client.js",
     "cordis.patch.yml",
+    "pool-默认.txt",
     "README.md",
     "LICENSE"
   ],

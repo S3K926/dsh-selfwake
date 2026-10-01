@@ -9,6 +9,18 @@
         enabled: true
         tickSeconds: 60
         intervalMinutes: 20
+        # 间隔抖动（±分钟）：每次开口后摇一个基准上下浮动的间隔，可复现。0 = 退回固定间隔。
+        jitterMinutes: 8
+        # 每天最多开口几次，跨天自动归零。0 = 不限。
+        dailyMax: 12
+        # 生成模式（默认开）：到点后注入「状态 ＋ 约束」，话由模型当场说，不把池子里的句子原样发出去。
+        # 关掉（false）= 抽池子直接发，老行为。
+        generateText: true
+        # 连续没被回的加权系数：间隔 = intervalMinutes × (1 + n × 这个)，封顶 6 倍。
+        # 0 = 不加权（老行为）。
+        backoffPerUnanswered: 0.5
+        # 开口后多久之内有动静算「他接了」。
+        replyWindowMinutes: 10
         minIdleMinutes: 20
         maxUnanswered: 7
         quietStartHour: 0

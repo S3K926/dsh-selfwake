@@ -13,12 +13,18 @@ const ctx = {
   effect(fn) {
     return fn();
   },
+  // 假 ctx 也得有 get：真插件里会拿 agents 服务投话；这里拿不到 → 走"降级发通知"那条路
+  get() {
+    return undefined;
+  },
 };
 
 const cfg = {
   enabled: true,
   tickSeconds: seconds,          // 短 tick，方便看
   intervalMinutes: 0,            // 不卡"间隔"
+  jitterMinutes: 0,              // 抖动也关掉，方便数清到底 fire 了几次
+  dailyMax: 0,                   // 不限次数（要试每日上限就把它改成 1、2）
   minIdleMinutes: 0,             // 不卡"安静"
   maxUnanswered: 2,              // 第 3 次该停
   quietStartHour: 0,
