@@ -833,6 +833,16 @@ export function composePrompt(now, st, live, angle, seg, situation) {
   const angleText = String(angle || '').replace(/[。.！!？?]+$/, '');
   if (angleText) {
     lines.push(pickOne([`想说的是：${angleText}。`, `心里那句话：${angleText}。`, `大概想说的是：${angleText}。`]));
+    // 🔴 2026-10-01 加（实测跑偏过一次，用户原话：「我在呢是啥」）：
+    //   软化语气时**别把想说的那件事换掉** —— 那次注入给的方向是"想问 ta 是不是把我忘了"，
+    //   输出却成了"我在呢"（软话顺口，但事儿换了、对不上题）。
+    lines.push(
+      pickOne([
+        '（说得软一点也行，但事儿还是这件事。）',
+        '（语气随便，想说的别换。）',
+        '（可以软，别换成别的事。）',
+      ]),
+    );
   }
   // 唯一的护栏（保留，但说成大白话；不然我会开始提"插件/系统"），随机措辞
   lines.push(pickOne(['只说真有的，别编。', '别编，说真的。', '照实说就行。']));
@@ -1241,7 +1251,8 @@ export function runSelftest() {
   // 每段注入带上"想说的是"（内容方向；池子 2026-10-01 起只写内容，不写表演形式）
   const segPrompt = composePrompt(now, pState, cfgBack, '想问问 ta 今天在忙什么，怎么一直不理我。', { index: 2, total: 3, intent: '想问问 ta 今天在忙什么' });
   check('注入里带上"想说的是"（内容方向）', segPrompt.includes('想问问 ta 今天在忙什么'), true);
-  check('注入里没有"该硬该软"的表演指令（用户原话：什么叫我先服软）', /先服软|软一点|硬一点|嘴硬/.test(segPrompt), false);
+  check('注入里没有"该怎么演"的表演指令（用户原话：什么叫我先服软）', /先服软|该硬|该软|嘴上硬一点|演一|装作/.test(segPrompt), false);
+  check('注入了"软化时别换事"的提醒', /别换成别的事|事儿还是这件事|想说的别换/.test(segPrompt), true);
   check('注入里不再写段的位置（末句/第几句）', /最后一句|上一句|就到这里吧|第 \d+\/\d+ 句/.test(segPrompt), false);
 
   // 同回合的几条必须共用同一套处境（否则自述互相矛盾）
