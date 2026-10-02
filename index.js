@@ -1051,6 +1051,11 @@ export function apply(ctx, input = {}) {
     const t = setTimeout(async () => {
       try {
         let guard = 0;
+        // 2026-10-02 改（她点破的）：**每一段抽不同的内容方向**。
+        //   原来整个回合共用池子抽到的那一条 → 三条注入都是"想说今天有点无聊"，
+        //   我只能同一件事换三种语气（"今天好无聊啊" / "……有点无聊" / "……无聊"），读起来像复读。
+        //   现在每段各抽一条（`pickLine` 会避开上一段那条），于是三句各说一件、又都在同一个处境里。
+        let prevLine = line;
         for (let idx = 1; idx < segCount && guard < MAX_SEGMENTS; idx += 1) {
           guard += 1;
           // 投之前重新判一次：这中间他要是说话了，就停下、别打扰
@@ -1061,13 +1066,15 @@ export function apply(ctx, input = {}) {
             say('[round] 他说话了 → 停掉本回合剩下的段');
             break;
           }
+          const segLine = pickLine(pool, prevLine);
+          prevLine = segLine;
           const res = deliverToSession(
             ctx,
             sessionsRoot,
-            composePrompt(new Date(), stFresh, live, line, { index: idx, total: segCount, intent: line }, situation),
+            composePrompt(new Date(), stFresh, live, segLine, { index: idx, total: segCount, intent: segLine }, situation),
             SELFWAKE_MARK,
           );
-          say(`[round] 第 ${idx + 1}/${segCount} 段注入 → ${res.ok ? '已投' : '失败(' + res.why + ')'}｜内容「${String(line).slice(0, 26)}」`);
+          say(`[round] 第 ${idx + 1}/${segCount} 段注入 → ${res.ok ? '已投' : '失败(' + res.why + ')'}｜内容「${String(segLine).slice(0, 26)}」`);
           const wait = segmentDelayMs();
           await new Promise((r) => setTimeout(r, wait));
         }
