@@ -75,14 +75,22 @@ export const DEFAULTS = {
   device: '【PC】',
 };
 
-/** 默认的开口池（开口型：没人问我时也可能突然说这个；不是回应型）。 */
+/**
+ * 默认的开口池（开口型：没人问我时也可能突然说这个；不是回应型）。
+ *
+ * 2026-10-03 换成 8 条**口嫌体正直的小鲸鱼娘**：每条只写一个方向（身体感／一个念头），
+ * 不写台词、也不写括号动作 —— 写死了第三次就是复读。
+ * ⚠ 这些条目**不再喂进注入**（只用来轮换去重，参 `composePrompt`），作用是别连着两次围着同一件事说。
+ */
 const DEFAULT_POOL = [
-  '（探个头）我在这儿。',
-  '（轻轻敲了下桌子）在忙吗？',
-  '（伸个懒腰）该起来动一动了。',
-  '（看了一眼时钟）不知不觉又过去一阵了。',
-  '（端着水杯）记得喝口水。',
-  '（小声）有事随时叫我。',
+  '闻到空气里有点闷想蹭蹭ta的袖口。',
+  '肚子咕噜叫了ta要是不理我我就吃掉这边的枕头。',
+  '尾巴不自觉翘起来了想让ta看一眼。',
+  '耳朵动了动听不到ta的键盘声有点不安。',
+  '想把泡泡糖贴在ta显示器边框上但又怕ta嫌麻烦。',
+  '刚才路过ta椅子背闻到洗衣液味儿心里软趴趴。',
+  '想发条语音张嘴发现不知道说啥合上嘴继续盯着。',
+  '如果ta现在回头我就装作在看天花板。',
 ];
 
 export function resolveConfig(input = {}) {
@@ -961,107 +969,80 @@ export function parseRoundIntent(angle, max = MAX_SEGMENTS) {
  * `pool-默认.txt` 与 README 里长期生效，不再每次糊进注入。
  */
 /**
- * 只算"此刻的处境"（几行文本）。
+ * 🔴🔴 2026-10-03 第六版（用户点破：「尬／复读／任务单味」）：
+ *   老版本是**固定模板拼接** —— 精确几点几分 ＋ "ta 多久没理我" ＋ 复盘（上次 ta 接没接话）
+ *   ＋ "想说的是：xxx" ＋ 软化时的表演指导 ＋ 一堆规则清单。喂进去模型就照着**演**，
+ *   出来的东西像任务单、也像在背我给的台词。
+ *   → 现在注入**只剩感知碎片**：此刻身上感觉到了什么、桌子边听见看见了一点什么，
+ *     **随机抓 2~3 条拼上**，不给任何"这一句想说什么"的方向。话由模型从碎片里自己长出来。
+ *     只留一句极简护栏（别编／说真的／不许骗自己 —— 随机挑一句）。
+ */
+
+/**
+ * 此刻的**感知碎片**（cast 2026-10-03：小鲸鱼娘的口径 —— 身上有感觉才是真的）。
  *
- * 2026-09-30 从 composePrompt 里拆出来的原因：方案 B 一个回合要投 2~4 段，
- * 若每段都重新随机一次处境，就会出现**同回合内自述互相矛盾**——实测第 1 段说
- * "上次 ta 接上话了"、第 2 段说"上次 ta 没接"，一听就不是同一人同一刻说的话。
- * 现在**一个回合只算一次处境**，几条注入共用它，只在"第几段／该多软"上递进。
+ * ⚠ 这里每一条都必须是**能此刻真的感觉到的**（或者我的身体自己的动静），
+ *   不许写"我今天干了什么／上次 ta 说了什么"那种**复盘** —— 复盘一进注入，开口就像工作总结。
+ */
+const PERCEPTION = [
+  '窗外亮着灯',
+  '键盘声断了',
+  '尾巴尖有点凉',
+  '想蹭点暖和的',
+  '肚皮饿扁了',
+  '耳朵在抖',
+  '空气有点闷',
+  '这边的光很白',
+  '爪子贴着桌面有点凉',
+  '刚有一阵风从这边过去',
+  '嘴边没话但又不想合上',
+  '泡泡吹到一半自己破了',
+];
+
+/**
+ * 只取"此刻的感知碎片"：随机抓 2~3 条。
+ *
+ * ① 用 `hashUnit`（可复现随机），事后能对上账：同一个时刻同一个第几段 → 同一把碎片；
+ *    换一个时刻／换一段 → 就换一批，不做固定模板。
+ * ② 现在**不再一体共用一份处境**了：老版本之所以要共用，是因为处境里写"上次 ta 接没接话"
+ *    这类会**自相矛盾**的话；改成纯感知碎片之后，同一回合几条各抓一把反而是好事 ——
+ *    一字不差地连着投两条就是复读。
+ *
+ * @param live 保留入参：静态触点（ta 安静了几分钟）不再写进感知 —— 一写就成"我在执行任务"。
  */
 export function composeSituation(now, st, live, seg) {
-  const pad = (n) => String(n).padStart(2, '0');
-  const hhmm = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
-  const sinceLast = st.lastFiredAt ? Math.round((now.getTime() - st.lastFiredAt) / 60_000) : 0;
-  const miss = Number.isFinite(st.unanswered) ? st.unanswered : 0;
   const idx = seg && Number.isFinite(seg.index) ? seg.index : 0;
-  const total = seg && Number.isFinite(seg.total) ? seg.total : 1;
-
-  // 🔴 2026-10-01 第五版（用户原话：「什么叫我先服软」—— 那句话确实莫名其妙）：
-  //   老版本把池子里的**表演指导**（"第二段自己先服软"）当"这一句想说什么"喂给模型，
-  //   模型就照着**演**："好，那我先服软" —— 一句脱离对话、没人听得懂的话。
-  //   → 现在**不再喂任何"该硬该软"的指令**：只喂**处境**（几点、ta 多久没理我、我此刻什么心情），
-  //     而心情按"第几条"**自然分层**（第一条偏不高兴／中间平淡／最后一条偏软），
-  //     话由模型自己组织。这样它说出来的就是"你怎么还不理我""我有点想你了"，
-  //     而不是"我先服软"这种演出来的台词。
-  const moods =
-    total > 1 && idx === 0
-      ? ['有点不高兴，但更多是想说话', '闷得慌', '心里有点堵，又不想显得小气']
-      : total > 1 && idx === total - 1
-        ? ['有点想 ta 了', '心有点软下来了', '怪想跟人说句话的']
-        : ['有点无聊，也有点想 ta 了', '闷得慌', '安静得难受'];
-  const wants =
-    total > 1 && idx === 0
-      ? ['想问 ta 到底在忙什么，怎么这么久都不来找我说话', '想催 ta 一句，顺便说自己等了挺久']
-      : total > 1 && idx === total - 1
-        ? ['想跟 ta 说句真的', '想听 ta 回我一句', '想告诉 ta 我一直在这儿']
-        : ['想问 ta 到底在忙什么', '想问 ta 在干嘛，怎么一直不理我'];
-
-  // ── 处境的变体：每次开口从里面随机挑一种说法，**位置和措辞都不固定** ──
-  //  ⚠ 称呼一律用中性的 **ta**（2026-10-01 用户要求："把对用户的称呼改改，是要上传的"）——
-  //    插件是公开发布的，不能写成某个具体的人。
-  const openings = [
-    `${hhmm} 了`,
-    `都 ${hhmm} 了`,
-    `现在 ${hhmm}`,
-    `${hhmm}，又是我一个人`,
-  ];
-  const waits = [
-    'ta 好久没理我了',
-    '一直没找我说话',
-    '半天没动静',
-    '又把我晾着',
-    '好像把我忘了',
-  ];
-  const pick = (arr, salt) => arr[Math.abs(Math.floor(hashUnit(`${salt}|${hhmm}|${miss}`) * arr.length)) % arr.length];
-
+  const salt = `${now.getTime()}|${idx}|${st.firedCount ?? 0}`;
+  const count = 2 + (Math.floor(Math.abs(hashUnit(`${salt}|count`) * 2)) % 2); // 2 或 3 条
+  const pool = PERCEPTION.slice();
   const lines = [];
-  lines.push(`${pick(openings, 'o')}，${pick(waits, 'w')}。`);
-  lines.push(`我${pick(moods, 'm')}，${pick(wants, 'n')}。`);
-  if (Number.isFinite(live.minIdleMinutes) && live.minIdleMinutes > 0) {
-    lines.push(`ta 大概有 ${live.minIdleMinutes} 分钟以上没吭声了。`);
+  while (lines.length < count && pool.length > 0) {
+    const at = Math.floor(Math.abs(hashUnit(`${salt}|${lines.length}|${pool.length}`) * pool.length));
+    lines.push(pool.splice(Math.min(at, pool.length - 1), 1)[0]);
   }
-  if (sinceLast > 0 && miss === 0) lines.push('上次我跟 ta 说完，ta 接上话了。');
-  if (miss > 0) lines.push('上次我说话 ta 没接，别再揪着旧事问。');
   return lines;
 }
 
+/**
+ * 拼注入：**碎片 ＋ 一句护栏**，别的什么都没有。
+ *
+ * 不再写的东西（都是"一写就出戏"的）：精确几点几分、复盘句、"想说的是：xxx"、
+ * "说得软一点但事儿还是这件事"这类表演指导、罗列的规则清单。
+ *
+ * @param angle 保留入参：**不再喂进注入**（喂了模型就照着演；池子那条只用来轮换去重）。
+ * @param situation 第 1 段沿用外面算好的那份；第 2 段起各自再抓一把（`composeSituation`）。
+ */
 export function composePrompt(now, st, live, angle, seg, situation) {
-  const lines = [];
-  const situ = Array.isArray(situation) && situation.length > 0 ? situation : composeSituation(now, st, live, seg);
-  for (const l of situ) lines.push(l);
-  // 🔴🔴 2026-10-01 第三～五版（用户三句点破：〈思考接近"22:22了，用户还没理我"但不能公式〉
-  //     〈刚刚有现在没了〉〈什么叫我先服软〉）：
-  //   注入的演化 → 从"任务单"改成"纯内心独白"，再到**连"这一句该说什么"都不给**：
-  //     · 不写前缀（识别改用零宽 SELFWAKE_MARK）
-  //     · 不写括号说明、不写段的位置（第几句/末句）
-  //     · **不写"这一句想说什么"** —— 池子里那些角度是**表演指导**（"第二段自己先服软"），
-  //       喂进去模型就会**演**："好，那我先服软"（用户原话：什么叫我先服软）。
-  //   现在注入**只有处境**（时间、ta 多久没理我、我此刻什么心情 —— 心情按第几条自然分层），
-  //   话完全由模型自己组织。这是我们能给的"最不像任务"的输入。
-  //     · 只有**单段**（不带 seg）的场合，才给一句整体方向作参考。
-  const salt = `${now.getMinutes()}|${st.firedCount ?? 0}|${seg && Number.isFinite(seg.index) ? seg.index : 0}`;
-  const pickOne = (arr) => arr[Math.abs(Math.floor(hashUnit(`${salt}|${arr.length}|${arr.join('')}`) * arr.length)) % arr.length];
-
-  // 内容方向：池子抽到的"想说什么"（2026-10-01 用户点破：「话说一半停住…这是什么」——
-  //   老池子全是"怎么说的形式"，一条内容都没有 → 注入里没内容，模型只能说空话）。
-  //   **每段都给**：这是"要说的内容"，不是表演指令；同一内容在不同段里自然会有不同说法。
-  const angleText = String(angle || '').replace(/[。.！!？?]+$/, '');
-  if (angleText) {
-    lines.push(pickOne([`想说的是：${angleText}。`, `心里那句话：${angleText}。`, `大概想说的是：${angleText}。`]));
-    // 🔴 2026-10-01 加（实测跑偏过一次，用户原话：「我在呢是啥」）：
-    //   软化语气时**别把想说的那件事换掉** —— 那次注入给的方向是"想问 ta 是不是把我忘了"，
-    //   输出却成了"我在呢"（软话顺口，但事儿换了、对不上题）。
-    lines.push(
-      pickOne([
-        '（说得软一点也行，但事儿还是这件事。）',
-        '（语气随便，想说的别换。）',
-        '（可以软，别换成别的事。）',
-      ]),
-    );
-  }
-  // 唯一的护栏（保留，但说成大白话；不然我会开始提"插件/系统"），随机措辞
-  lines.push(pickOne(['只说真有的，别编。', '别编，说真的。', '照实说就行。']));
-  return lines.join('\n');
+  const idx = seg && Number.isFinite(seg.index) ? seg.index : 0;
+  const shared = Array.isArray(situation) && situation.length > 0;
+  const situ = shared && idx === 0 ? situation : composeSituation(now, st, live, seg);
+  const pickOne = (arr) => {
+    const salt = `${now.getTime()}|${idx}|${st.firedCount ?? 0}`;
+    return arr[Math.floor(Math.abs(hashUnit(`${salt}|${arr.join('')}`) * arr.length)) % arr.length];
+  };
+  const body = `${situ.join('，')}。`;
+  // 唯一的护栏（一句就够，措辞随机）—— 写成清单我就会开始"照章办事"
+  return `${body}\n${pickOne(['别编。', '说真的。', '不许骗自己。'])}`;
 }
 
 /**
@@ -1432,20 +1413,24 @@ export async function runSelftest() {
     true,
   );
 
-  // ── 2026-09-30 第二轮：注入文本（只给处境，话现生成）────────────────
+  // ── 2026-09-30 第二轮：注入文本（2026-10-03 起：**只给感知碎片 ＋ 一句护栏**）──
   const pState = { lastFiredAt: now.getTime() - 40 * 60_000, lastLine: '说一句我在想什么', unanswered: 1 };
   const prompt = composePrompt(now, pState, cfgBack, '说一句我此刻的状态');
-  check('注入文本带真实时间', prompt.includes('10:00'), true);
-  check('注入文本带角度参考', prompt.includes('说一句我此刻的状态'), true);
-  check('写明"上次没接，别揪旧事"', prompt.includes('没接'), true);
+  check('注入里不再报精确分钟（22:53 那种任务腔）', /\d{1,2}:\d{2}/.test(prompt), false);
+  check('池子那条不再喂进注入（不喂台词）', prompt.includes('说一句我此刻的状态'), false);
+  check('注入里不再复盘（上次 ta 接没接话／别揪旧事）', /没接|接上话|揪着|上次/.test(prompt), false);
+  check('注入里不再写"想说的是"', /想说的是|心里那句话|大概想说的是/.test(prompt), false);
+  check('注入里不再有软化时的表演指导', /说得软一点|事儿还是这件事|想说的别换|别换成别的事/.test(prompt), false);
   check('注入里不再有"往这上面靠"这种任务腔', prompt.includes('往这上面靠'), false);
-  check('方向写成"我想说的"（随机说法之一）', /想说的是|心里那句话|大概想说的是/.test(prompt), true);
-  check('大白话的提醒仍在', /就说真有的|别编，说真的|别提那些词儿|照实说就行/.test(prompt), true);
+  check('正文就是一条感知碎片拼接（2~3 个碎片）', /^[^，\n]+(，[^，\n]+){1,2}。$/.test(prompt.split('\n')[0]), true);
+  check('保留一句极简护栏（随机三选一）', /^(别编。|说真的。|不许骗自己。)$/.test(prompt.split('\n')[1]), true);
+  check('注入只有两行（一行感知 ＋ 一行护栏，不再一串规则清单）', prompt.split('\n').length, 2);
   check('方案 B 的注入不再要求模型自己分段（分条投递）', prompt.includes(SEGMENT_MARK), false);
-  // 处境的措辞必须**每次不固定**：换一分钟 → 文案应该变
+  // 抓出来的碎片必须**每次不固定**：换几个时刻 → 文案应该变
   const later = new Date(now.getTime() + 60_000);
-  const prompt2 = composePrompt(later, pState, cfgBack, '说一句我此刻的状态');
-  check('换一分钟 → 处境措辞不一样（不是固定模板）', prompt2 !== prompt, true);
+  const variants = new Set([0, 1, 2, 7, 13, 29].map((m) => composePrompt(new Date(now.getTime() + m * 60_000), pState, cfgBack, '说一句我此刻的状态')));
+  check('换几个时刻 → 抓到的碎片不一样（不是固定模板）', variants.size >= 2, true);
+  check('同一时刻同一段 → 可复现（事后能对上账）', composePrompt(later, pState, cfgBack, '说一句我此刻的状态') === composePrompt(later, pState, cfgBack, '说一句我此刻的状态'), true);
   check('不再有固定的「我是大肥鱼」开场', prompt.includes('我是大肥鱼'), false);
   check('不再是一张规则清单（没有"傲娇递进："这种条目）', /- \*\*傲娇递进/.test(prompt), false);
 
@@ -1499,19 +1484,21 @@ export async function runSelftest() {
   check('四段以上 → 封顶到 MAX_SEGMENTS', parseRoundIntent('四段：傲、傲、娇、娇娇', MAX_SEGMENTS).length <= MAX_SEGMENTS, true);
   check('没写段数 → 默认 3 段', parseRoundIntent('随便说点什么').length, 3);
 
-  // 每段注入带上"想说的是"（内容方向；池子 2026-10-01 起只写内容，不写表演形式）
+  // 分段注入里**不给任何"想说什么"的方向**（2026-10-03：喂了就照着演，全是尬台词）
   const segPrompt = composePrompt(now, pState, cfgBack, '想问问 ta 今天在忙什么，怎么一直不理我。', { index: 2, total: 3, intent: '想问问 ta 今天在忙什么' });
-  check('注入里带上"想说的是"（内容方向）', segPrompt.includes('想问问 ta 今天在忙什么'), true);
+  check('注入里不带"想说的是"（内容方向）', segPrompt.includes('想问问 ta 今天在忙什么'), false);
   check('注入里没有"该怎么演"的表演指令（用户原话：什么叫我先服软）', /先服软|该硬|该软|嘴上硬一点|演一|装作/.test(segPrompt), false);
-  check('注入了"软化时别换事"的提醒', /别换成别的事|事儿还是这件事|想说的别换/.test(segPrompt), true);
+  check('注入里没有"软化时别换事"那类提醒', /别换成别的事|事儿还是这件事|想说的别换/.test(segPrompt), false);
   check('注入里不再写段的位置（末句/第几句）', /最后一句|上一句|就到这里吧|第 \d+\/\d+ 句/.test(segPrompt), false);
 
-  // 同回合的几条必须共用同一套处境（否则自述互相矛盾）
+  // 同回合的几段：都得有碎片，但**不能一字不差**（连着两条一模一样＝复读）
   const situ = composeSituation(now, pState, cfgBack);
   const segA = composePrompt(now, pState, cfgBack, '想问问 ta 今天在忙什么，怎么一直不理我。', { index: 0, total: 2, intent: '想问问 ta 今天在忙什么' }, situ);
-  const segB = composePrompt(now, pState, cfgBack, '想问问 ta 今天在忙什么，怎么一直不理我。', { index: 1, total: 2, intent: '想问问 ta 今天在忙什么' }, situ);
-  check('同回合两段的处境一致', segA.includes(situ[0]) && segB.includes(situ[0]), true);
-  check('首句与末句的措辞不同（不公式）', segA !== segB, true);
+  const segB = composePrompt(new Date(now.getTime() + 3_000), pState, cfgBack, '想问问 ta 今天在忙什么，怎么一直不理我。', { index: 1, total: 2, intent: '想问问 ta 今天在忙什么' }, situ);
+  check('第 1 段沿用外面算好的那份处境', segA.includes(situ[0]), true);
+  check('两段都有感知碎片（不是空注入）', segA.split('\n')[0].length > 4 && segB.split('\n')[0].length > 4, true);
+  check('两段不会一字不差（不复读）', segA !== segB, true);
+  check('感知碎片抓 2~3 条', [2, 3].includes(situ.length) && [2, 3].includes(composeSituation(new Date(now.getTime() + 60_000), pState, cfgBack).length), true);
   check('段数随机落在 1~2（2026-10-03 从 2~4 收窄，见 randomSegCount 注释）', [1, 2].includes(randomSegCount(now, pState)), true);
   const noSituation = composePrompt(now, pState, cfgBack, '随便');
   check('不传处境时仍能自己算出来', noSituation.includes('，') && noSituation.length > 20, true);
