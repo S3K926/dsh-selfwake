@@ -21,9 +21,9 @@
  *
  * 自检口 `node index.js --selftest` 放在模块层（独立跑时 cordis 不调 apply，写在里面等于死代码）。
  */
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 
 export const name = 'selfwake';
@@ -62,6 +62,16 @@ export const DEFAULTS = {
   stateDir: '',
   poolFile: '',
   sessionsRoot: '',
+  // 2026-10-03 加：开口能不能围着档案里的**真事**说（"更像陪伴"那条）。
+  //   true（默认）＝ 先试着读档案的「挂着的」／最后一条日记，读不到就用池子，行为跟原来一样；
+  //   false ＝ 完全不碰档案，只用池子那条。
+  topicFromArchive: true,
+  // 2026-10-03 加：'once'＝让模型**一次把整个回合写完**（句间 ⟪分段⟫），回读切段后不再补投，
+  //   省掉"每段各一次完整上下文调用"；回读失败会自动降级成 'per-segment'，不会开不了口。
+  //   'per-segment'＝原来那条路（每段一条独立注入，各自生成）。
+  deliverMode: 'once',
+  // 档案根。留空 = 认 DSH_MEMORY_ROOT 环境变量，再没有就 <家目录>/memory。
+  memoryRoot: '',
   device: '【PC】',
 };
 
@@ -80,12 +90,15 @@ export function resolveConfig(input = {}) {
   for (const key of ['tickSeconds', 'intervalMinutes', 'jitterMinutes', 'dailyMax', 'backoffPerUnanswered', 'replyWindowMinutes', 'minIdleMinutes', 'maxUnanswered', 'quietStartHour', 'quietEndHour']) {
     if (!Number.isFinite(merged[key])) merged[key] = DEFAULTS[key];
   }
-  for (const key of ['notify', 'enabled', 'generateText']) {
+  for (const key of ['notify', 'enabled', 'generateText', 'topicFromArchive']) {
     if (typeof merged[key] !== 'boolean') merged[key] = DEFAULTS[key];
   }
-  for (const key of ['notifyScript', 'stateDir', 'poolFile', 'sessionsRoot', 'device']) {
+  for (const key of ['notifyScript', 'stateDir', 'poolFile', 'sessionsRoot', 'memoryRoot', 'device']) {
     if (typeof merged[key] !== 'string') merged[key] = DEFAULTS[key];
   }
+  // 投递模式只认这两个值，写别的（或写错大小写）一律退回 'per-segment'（最稳的那条路）
+  const mode = String(merged.deliverMode ?? '').toLowerCase();
+  merged.deliverMode = mode === 'once' ? 'once' : 'per-segment';
   return merged;
 }
 
@@ -182,8 +195,10 @@ async function realUserActivityMs(agent) {
       const ev = events[i];
       if (String(ev?.type ?? '') !== 'user/message') continue;
       if (isSelfwakeInjection(ev)) continue; // 自己注入的不算"用户在说话"
-      const t = Number(ev?.time);
-      if (Number.isFinite(t) && t > 0) return t;
+      // 2026-10-03 修：以前直接 `Number(ev?.time)`，秒级时间会跟毫秒级的 lastFiredAt 比出荒谬结果
+      // （"使用者 0 分钟前还在说话"那种自我阻塞），统一单位后再比。
+      const t = normMs(ev?.time);
+      if (t > 0) return t;
     }
   } catch {
     /* 读不到就返回 0 */
@@ -196,6 +211,118 @@ function pickLine(pool, last) {
   const candidates = pool.length > 1 ? pool.filter((x) => x !== last) : pool;
   const list = candidates.length > 0 ? candidates : pool;
   return list[Math.floor(Math.random() * list.length)];
+}
+
+/* ------------------------------------- 开口的「话题方向」（2026-10-03 加） */
+
+/** 话题最长多少字：只给方向，不给细节（见 sanitizeTopic 的说明）。 */
+const TOPIC_MAX = 24;
+/** 日记条目里"这轮干了什么"可能叫这些名字（档案自己改过字段名，一律认）。 */
+const TOPIC_FIELDS = ['event_description', '这一轮干了什么', '干了什么', 'outline'];
+/** 状态文件里"挂着的事"可能叫这些名字。 */
+const PENDING_MARKS = ['挂着的', '未完成', '待办', 'unfinished'];
+
+/**
+ * 把档案里的一句话**提炼成话题方向**（不是原文摘录）。
+ *
+ * 为什么只给方向、不给原文：这个插件是要公开发布的，注入里的字会随请求发给模型，
+ * 把档案原文（路径、密码、人名、具体结论）一股脑塞进去不合适。
+ * 所以这里：去条目标记、去括号补充、去 Windows 路径、压成一行、**硬截断到 24 字**。
+ * 读本机档案、把结果注入本机会话是安全的；不安全的只是"细节外泄"，在这里卡掉。
+ */
+export function sanitizeTopic(text, max = TOPIC_MAX) {
+  const s = String(text ?? '')
+    .replace(/\*\*/g, '')
+    .replace(/^[-*•·]\s*/, '')
+    .replace(/^[①-⑳]+\s*/, '')          // 圈码：① ② ③
+    .replace(/^\d+[.、)]\s*/, '')        // 数字编号：1. 1、1)
+    .replace(/[`（(【][^`）)】]{0,40}[`）)】]/g, '')
+    .replace(/[A-Za-z]:\\[^\s，。]+/g, '')
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (s === '') return '';
+  return s.length > max ? `${s.slice(0, max)}…` : s;
+}
+
+/** 从状态文件正文里找"挂着的事"第一条。 */
+function pendingLineOf(text) {
+  const lines = String(text ?? '').split(/\r?\n/);
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!PENDING_MARKS.some((mark) => lines[i].includes(mark))) continue;
+    // 同一行就写着内容：`# **挂着的三条**：xxx`
+    const inline = /[：:]\s*(.+)$/.exec(lines[i])?.[1] ?? '';
+    const one = sanitizeTopic(inline);
+    if (one !== '' && !/^(没有|无|暂无|略)/.test(one)) return one;
+    // 否则往下找第一条列表项，撞到下一个标题就停
+    for (let j = i + 1; j < Math.min(i + 12, lines.length); j += 1) {
+      const raw = lines[j].trim();
+      if (raw === '') continue;
+      if (/^#{1,6}\s/.test(raw)) break;
+      const next = sanitizeTopic(raw);
+      if (next !== '' && !/^(没有|无|暂无|略)/.test(next)) return next;
+    }
+  }
+  return '';
+}
+
+/** 从日记正文里取**最后一条**的"这轮干了什么"第一行。 */
+function lastDiaryTopic(text) {
+  const lines = String(text ?? '').split(/\r?\n/);
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (!/^###\s+#?\d+/.test(lines[i].trim())) continue;
+    for (let j = i + 1; j < Math.min(i + 60, lines.length); j += 1) {
+      const raw = lines[j].trim();
+      if (/^###\s/.test(raw)) return '';
+      const field = raw.replace(/\*\*/g, '').trim();
+      if (!TOPIC_FIELDS.includes(field)) continue;
+      for (let k = j + 1; k < Math.min(j + 8, lines.length); k += 1) {
+        const one = sanitizeTopic(lines[k]);
+        if (one !== '') return one;
+      }
+    }
+    return ''; // 只看最后一条
+  }
+  return '';
+}
+
+/**
+ * 读档案里"此刻有什么可说的"：**优先「挂着的」**，其次最后一条日记的"干了什么"。
+ *
+ * ⚠ 独立原则：**不 import 任何别的插件**，直接按档案的既定形状读文件。
+ * ⚠ 降级原则：档案不在／换了设备／字段对不上／任何异常 → 一律返回空，
+ *   调用方退回池子那条，**绝不能因为读不到就不说话**。
+ */
+export function readTopicHint(cfg) {
+  try {
+    const root = String(cfg?.memoryRoot ?? '').trim() || process.env.DSH_MEMORY_ROOT || join(homeDir(), 'memory');
+    if (root === '' || !existsSync(root)) return '';
+    const stateFile = join(root, '生长', '状态.md');
+    if (existsSync(stateFile)) {
+      const one = pendingLineOf(readFileSync(stateFile, 'utf8'));
+      if (one !== '') return one;
+    }
+    const diaryFile = join(root, '日记.md');
+    if (existsSync(diaryFile)) return lastDiaryTopic(readFileSync(diaryFile, 'utf8'));
+    return '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * 把"可能是秒、可能是毫秒"的时间统一成**毫秒**（认不出来返回 0）。
+ *
+ * 为什么要这个：会话事件里的 `time` 有的宿主给秒（1.7e9）、有的给毫秒（1.7e12），
+ * 而注入时刻是 `Date.now()`（毫秒）。直接比大小，秒级时间**永远小于**注入时刻，
+ * 于是"只看注入之后的事件"这条过滤会把**全部事件都挡掉** → 回读拿到 0 字
+ * （2026-09-30 23:35 / 23:44 实测读回 0 字，正是这个形状）。
+ * 判据：1e11 毫秒 ≈ 1973 年、1e11 秒 ≈ 公元 5138 年 —— 小于它的当秒，不会误伤毫秒值。
+ */
+export function normMs(value) {
+  const t = Number(value);
+  if (!Number.isFinite(t) || t <= 0) return 0;
+  return t < 1e11 ? Math.round(t * 1000) : Math.round(t);
 }
 
 /** 读池子：文件在就用文件，否则用内置默认。 */
@@ -397,6 +524,9 @@ export const SEGMENT_DELAY_MAX_MS = 15_000;
 /** 投出第 1 段之后，等多久去读回模型写的那整段（够它把回合写完就行）。 */
 export const SEGMENT_WAIT_MS = 45_000;
 
+/** 等待期间多久回读一次（2026-10-03：老做法是干等 45 秒再读一次，改成轮询到稳定为止）。 */
+export const SEGMENT_POLL_MS = 2_000;
+
 /** 一个回合结束后，下一次检查的间隔乘这个数（用户拍板：×2 —— 一个回合顶好几句）。 */
 export const ROUND_COOLDOWN_FACTOR = 2;
 
@@ -593,9 +723,13 @@ export async function readLastAssistantText(agent, sinceMs = 0) {
     }
   }
 
-  const api = await loadSurfaceApi();
   const session = agent.session;
-  if (!api || !session || typeof session.snapshotEvents !== 'function') return '';
+  if (!session || typeof session.snapshotEvents !== 'function') return '';
+  // 2026-10-03 修：会话自己就带 `deriveEventMessage` 时**根本不需要**那个动态 import 的 api，
+  // 老写法却因为 `!api` 提前 return '' —— 于是"拿得到事件也读不回来"（回读 0 字的另一个形状）。
+  const canDerive = typeof session.deriveEventMessage === 'function';
+  const api = canDerive ? null : await loadSurfaceApi();
+  if (!canDerive && !api) return '';
 
   let events = [];
   try {
@@ -603,7 +737,14 @@ export async function readLastAssistantText(agent, sinceMs = 0) {
   } catch {
     return '';
   }
-  const freshEnough = (ev) => !(sinceMs > 0 && typeof ev?.time === 'number' && ev.time < sinceMs);
+  // ⚠ 2026-10-03 修（回读 0 字的一个真因候选）：事件时间**单位不一定统一**。
+  //   拿秒级时间戳跟毫秒级的 sinceMs 直接比，所有事件都会"比注入时刻还早" → 立刻 break → 读回 0 字。
+  //   这里统一成毫秒：明显小于 1e11 的当秒（1e11 秒 ≈ 公元 5138 年，不会误伤毫秒值）。
+  const freshEnough = (ev) => {
+    if (!(sinceMs > 0)) return true;
+    const t = normMs(ev?.time);
+    return !(t > 0 && t < sinceMs);
+  };
   const toMsg = (ev) => {
     try {
       const m = typeof session.deriveEventMessage === 'function'
@@ -637,6 +778,73 @@ export async function readLastAssistantText(agent, sinceMs = 0) {
   if (pieces.length === 0) return '';
   // 片段之间用换行接（每段本来就是独立的行/段），然后**剥掉开头的元叙述、留下正文**
   return trimMetaHead(pieces.join('\n\n'));
+}
+
+/**
+ * **等模型把这一回合写完再读回来**（2026-10-03 加，"一次想完"这条路要靠它）。
+ *
+ * 老做法是一次性 sleep 45 秒再读一次 —— 模型没写完就被读走（只剩开头 100 字），
+ * 或者消息还在排队区（前端没点"插话发送"）压根没开始写（读回 0 字）。
+ * 现在改成**轮询到稳定为止**：
+ *   · 每 `intervalMs` 读一次；
+ *   · 读到带 `⟪分段⟫` 的文本 → 说明整回合写完了，立刻返回；
+ *   · 否则**连续两次读到一样**才算写完（模型分段输出时会一直变长）；
+ *   · 超时返回最后一次读到的（哪怕是空的）—— 由调用方决定降级。
+ *
+ * @param agent 活的 agent
+ * @param sinceMs 注入时刻（毫秒）
+ * @param opts.timeoutMs 最长等多久（默认 SEGMENT_WAIT_MS）
+ * @param opts.intervalMs 多久读一次
+ * @param opts.sleep 注入用（自检里换成假时钟）
+ * @returns {{text:string, waitedMs:number, stable:boolean}}
+ */
+export async function waitForAssistantText(agent, sinceMs = 0, opts = {}) {
+  const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : SEGMENT_WAIT_MS;
+  const intervalMs = Number.isFinite(opts.intervalMs) ? opts.intervalMs : 2_000;
+  const sleep = typeof opts.sleep === 'function' ? opts.sleep : (ms) => new Promise((r) => setTimeout(r, ms));
+  const startedAt = Date.now();
+  let last = '';
+  let text = '';
+  let stable = false;
+  while (Date.now() - startedAt < timeoutMs) {
+    await sleep(intervalMs);
+    text = await readLastAssistantText(agent, sinceMs);
+    if (text === '') { last = ''; continue; }
+    if (text.includes(SEGMENT_MARK)) { stable = true; break; } // 整回合写完了
+    if (text === last) { stable = true; break; }               // 不再变长 = 写完了
+    last = text;
+  }
+  return { text, waitedMs: Date.now() - startedAt, stable };
+}
+
+/**
+ * **一次想完**（`deliverMode: 'once'`）：等模型把整个回合一次写完 → 回读 → 切段 → **不再补投**。
+ *
+ * 省的就是"每段各触发一次完整上下文调用"的那部分开销。
+ *
+ * ⚠ 降级写在最前面：回读拿不到整回合（模型还没写完／消息还在排队区等前端点发送／事件形状变了）
+ *   → 返回 `{ ok: false }`，调用方照旧走分条补投，**跟没开这个功能时一模一样**，
+ *   绝不因为省 token 就开不了口。
+ *
+ * @param opts.agentOf 取活着的 agent（生产环境传 `safeAgentFor`，测试传假的）
+ * @param opts.say 写日志（测试里收数组）
+ * @returns {{ok:boolean, segs:string[], waited:object}}
+ */
+export async function tryDeliverOnce({ sessionId, injectAt, live, agentOf, say, sleep } = {}) {
+  const log = typeof say === 'function' ? say : () => {};
+  const h = typeof agentOf === 'function' ? agentOf(sessionId) : null;
+  const waited = await waitForAssistantText(h, injectAt, {
+    timeoutMs: SEGMENT_WAIT_MS,
+    intervalMs: SEGMENT_POLL_MS,
+    ...(sleep ? { sleep } : {}),
+  });
+  const segs = splitSegments(waited.text, MAX_SEGMENTS);
+  if (segs.length >= 2) {
+    log(`[once] 一次生成 ${segs.length} 段（等 ${waited.waitedMs}ms，${waited.text.length} 字）→ 不补投；等前端按 ⟪分段⟫ 分开显示`);
+    return { ok: true, segs, waited };
+  }
+  log(`[once] 没拿到整回合（${waited.text.length} 字／stable=${waited.stable}／等 ${waited.waitedMs}ms）→ 降级：照旧分条补投${describeAssistantEvents(h, injectAt)}`);
+  return { ok: false, segs, waited };
 }
 
 /**
@@ -675,16 +883,23 @@ export function describeAssistantEvents(agent, sinceMs = 0) {
 }
 
 /**
- * 一个回合说几条：**2~4 随机**（可复现）。
+ * 一个回合说几条：**1~2 随机**（可复现）。
  *
  * 2026-10-01（用户点破「话说一半停住，隔一会儿再补一句…这是什么」）：
  *   段数**不再从池子解析** —— 池子现在只写"想说什么"（内容），
  *   那种"几段／怎么停顿／怎么递进"的**形式描述**已经从池子里删掉了。
  *   **池子管内容，段数归插件**。
+ *
+ * ⚠ 2026-10-03 从 2~4 收到 1~2（省 token 的第一步，零风险）：
+ *   每一段都是一条**独立的注入**，模型每回应一次就要把整个会话上下文重放一遍。
+ *   段数 2~4（均值 3）＝ 一天约 36 次完整上下文调用（日均上限 12 次 × 3 段），
+ *   而这段时间里说的话只有十几句。收到 1~2 段后开销减半以上，观感几乎不变
+ *   （短回合本来就是"说一两句就停"）。
+ *   想回到原来的节奏：把下面的 2 改回 3、把 1 改回 2 即可（2 / 3 / 4）。
  */
 export function randomSegCount(now, st) {
   const salt = `${dayKey(now)}|${st?.firedCount ?? 0}|${st?.lastLine ?? ''}|seg`;
-  return 2 + (Math.abs(Math.floor(hashUnit(salt) * 3)) % 3); // 2 / 3 / 4
+  return 1 + (Math.abs(Math.floor(hashUnit(salt) * 2)) % 2); // 1 / 2
 }
 
 /**
@@ -1025,17 +1240,27 @@ export function apply(ctx, input = {}) {
     const line = pickLine(pool, st.lastLine); // 池子降级成"角度参考"，仍用它避免连着抽到同一个角度
     // ── 生成模式（默认）：注入"状态 ＋ 约束"，话由模型当场说；不然就把池子那条直接发出去 ──
     const useGen = live.generateText !== false;
+    // 2026-10-03 加：**能读到档案就围着真事说**（优先「挂着的」，其次最后一条日记），
+    // 读不到（档案不在 / 换了设备 / 字段对不上）就用池子那条 —— 跟原来的行为一模一样。
+    // 池子那条仍然是退路，所以这条改动只会让它"更有话说"，不会让它说不出来。
+    const hint = useGen && live.topicFromArchive !== false ? readTopicHint(live) : '';
+    const said = hint || line;
     // 一个回合只算一次"处境"，同回合的几条注入共用（否则自述会互相矛盾）
     const situation = useGen ? composeSituation(now, st, live) : [];
     // 回合拆解放在前面算：**第 1 段也要带上"这一句想说什么"**。
     // 段数由插件随机定（池子只写内容），内容方向就是池子抽到的那条。
     const segCount = useGen ? randomSegCount(now, st) : 1;
-    const firstSeg = useGen ? { index: 0, total: segCount, intent: line } : null;
-    const text = useGen ? composePrompt(now, st, live, line, firstSeg, situation) : line;
+    const firstSeg = useGen ? { index: 0, total: segCount, intent: said } : null;
+    // once 模式：**唯一的格式要求**——一次把整个回合写完，句间用 ⟪分段⟫ 隔开。
+    // 措辞刻意压到最短、放在最后（她的老意见：注入一像任务单，思考就变成"我在执行指令"）。
+    let text = useGen ? composePrompt(now, st, live, said, firstSeg, situation) : line;
+    if (useGen && live.deliverMode === 'once' && segCount > 1) {
+      text = `${text}\n（这一次把你整个回合想说的 ${segCount} 句话一次说完，句与句之间用 ${SEGMENT_MARK} 隔开。）`;
+    }
     // 先试着**把话投进会话**（这才是"醒过来"）；投不进去才降级发通知
     const delivered = deliverToSession(ctx, sessionsRoot, text, useGen ? SELFWAKE_MARK : '（自唤醒）');
     const sent = delivered.ok ? { ok: false, why: '已进会话，不必再发通知' } : sendNotify(live, live.device || 'DSH', useGen ? line : text);
-    say(`[fire] ${verdict.why} → 模式=${useGen ? '生成' : '池子'}；角度=「${line}」；投递=${delivered.ok ? '已进会话(' + (delivered.via || '?') + ') ' + String(delivered.sessionId).slice(0, 20) + '…' : '失败(' + delivered.why + ')'}；通知=${delivered.ok ? '跳过' : (sent.ok ? '已发' : '失败(' + sent.why + ')')}`);
+    say(`[fire] ${verdict.why} → 模式=${useGen ? '生成' : '池子'}；话题=「${said}」${hint ? '（来自档案）' : '（来自池子）'}；投递=${delivered.ok ? '已进会话(' + (delivered.via || '?') + ') ' + String(delivered.sessionId).slice(0, 20) + '…' : '失败(' + delivered.why + ')'}；通知=${delivered.ok ? '跳过' : (sent.ok ? '已发' : '失败(' + sent.why + ')')}`);
     // ── 方案 B（2026-09-30 用户拍板）：一个回合 = **投几条短注入，每条各生成一句** ──
     // 为什么不再"回读自己生成的多段"：实测回读拿不到完整正文（只有开头那一截，
     // 23:26 读到 1 段｜共 100 字，23:35/23:44 读回 0 字），正文在别处、读不全。
@@ -1047,6 +1272,10 @@ export function apply(ctx, input = {}) {
     }
     roundActive = true;
     const sessionId = delivered.sessionId;
+    const injectAt = Date.now();
+
+    /** 原路（方案 B）：剩下几段各投一条独立注入、各自生成。 */
+    const scheduleSegments = () => {
     const firstDelay = segmentDelayMs();
     const t = setTimeout(async () => {
       try {
@@ -1085,7 +1314,21 @@ export function apply(ctx, input = {}) {
         roundActive = false;
       }
     }, firstDelay);
-    if (t && typeof t.unref === 'function') t.unref();
+      if (t && typeof t.unref === 'function') t.unref();
+    };
+
+    // ── 一次想完（deliverMode: 'once'，2026-10-03 加）──
+    const once = live.deliverMode === 'once'
+      ? await tryDeliverOnce({
+        sessionId,
+        injectAt,
+        live,
+        agentOf: safeAgentFor,
+        say,
+      })
+      : { ok: false };
+    if (once.ok) roundActive = false;
+    else scheduleSegments();
 
     // 摇下一次的间隔（加权 ＋ 可复现抖动）＋每日计数
     const today = dayKey(now);
@@ -1095,7 +1338,8 @@ export function apply(ctx, input = {}) {
     const next = {
       ...st,
       lastFiredAt: now.getTime(),
-      lastLine: line,
+      lastLine: said, // 记"这次实际说了什么"：连着两次围着同一件事说最像复读
+      lastTopicFrom: hint ? 'archive' : 'pool',
       lastMode: useGen ? 'generate' : 'pool',
       unanswered: nextUnanswered,
       firedCount,
@@ -1132,7 +1376,7 @@ export function apply(ctx, input = {}) {
 }
 
 /** 自检口（模块层，独立可跑）：只验纯逻辑，不碰真实环境。 */
-export function runSelftest() {
+export async function runSelftest() {
   const cfg = resolveConfig({ intervalMinutes: 20, minIdleMinutes: 20, maxUnanswered: 3 });
   const now = new Date('2026-09-26T10:00:00'); // 10 点，不在静默段
   const results = [];
@@ -1268,7 +1512,7 @@ export function runSelftest() {
   const segB = composePrompt(now, pState, cfgBack, '想问问 ta 今天在忙什么，怎么一直不理我。', { index: 1, total: 2, intent: '想问问 ta 今天在忙什么' }, situ);
   check('同回合两段的处境一致', segA.includes(situ[0]) && segB.includes(situ[0]), true);
   check('首句与末句的措辞不同（不公式）', segA !== segB, true);
-  check('段数随机落在 2~4', [2, 3, 4].includes(randomSegCount(now, pState)), true);
+  check('段数随机落在 1~2（2026-10-03 从 2~4 收窄，见 randomSegCount 注释）', [1, 2].includes(randomSegCount(now, pState)), true);
   const noSituation = composePrompt(now, pState, cfgBack, '随便');
   check('不传处境时仍能自己算出来', noSituation.includes('，') && noSituation.length > 20, true);
   check('第一块是正文、第二块像自述 → 不剥', trimMetaHead('我在吐泡泡。\n\n我需要数一数戳破几个了。').includes('我在吐泡泡'), true);
@@ -1276,6 +1520,94 @@ export function runSelftest() {
   check('空文本 → 空', trimMetaHead('   '), '');
   check('默认前缀是零宽标记（肉眼看不见）', withPrefix('x', undefined), SELFWAKE_MARK + 'x');
   check('显式传前缀时就用它', withPrefix('x', '（自唤醒）'), '（自唤醒）x');
+
+  // ── 话题方向（2026-10-03 加）：全部在临时目录里造假档案，不碰真档案 ──
+  check('提炼：去掉条目符号与括号补充', sanitizeTopic('- ① 去弄那个（晚点再说）'), '去弄那个');
+  check('提炼：去掉 Windows 路径', sanitizeTopic('改 D:\\dsh\\大肥鱼\\日记.md 那处'), '改 那处');
+  check('提炼：硬截断到 24 字', sanitizeTopic('一二三四五六七八九十一二三四五六七八九十一二三四五六').length <= 25, true);
+  check('提炼：空文本 → 空', sanitizeTopic('   '), '');
+  check('读不到档案（目录不存在）→ 空，不抛', readTopicHint({ memoryRoot: join(tmpdir(), '肯定没有这个目录-selfwake') }), '');
+  check('关掉 topicFromArchive 之外的配置不影响（缺字段也不抛）', typeof readTopicHint({}), 'string');
+
+  const fakeRoot = mkdtempSync(join(tmpdir(), 'selfwake-topic-'));
+  try {
+    mkdirSync(join(fakeRoot, '生长'), { recursive: true });
+    writeFileSync(join(fakeRoot, '生长', '状态.md'), '# **挂着的**\n- ① 把插件改动推 GitHub（她定的口径：全部弄好再推）\n- ② 别的\n', 'utf8');
+    check('状态里有「挂着的」→ 取第一条', readTopicHint({ memoryRoot: fakeRoot }).includes('把插件改动推 GitHub'), true);
+
+    // 状态里没有 → 退回日记最后一条的"这一轮干了什么"
+    writeFileSync(join(fakeRoot, '生长', '状态.md'), '# 状态\n什么都没挂着。\n', 'utf8');
+    writeFileSync(join(fakeRoot, '日记.md'), '### #1 ｜ 2026-10-01 ｜ 10:00 ｜ 【PC】 ｜ full\n\n**这一轮干了什么**\n- 一起把备份目录理了一遍\n', 'utf8');
+    check('状态没有 → 退回最后一条日记', readTopicHint({ memoryRoot: fakeRoot }).includes('一起把备份目录理了一遍'), true);
+
+    // 字段写法换了（老格式 event_description）也要认
+    writeFileSync(join(fakeRoot, '日记.md'), '### #2 ｜ 2026-10-02 ｜ 10:00 ｜ 【PC】 ｜ full\n\n**event_description**\n- 老字段写法也要认得出来\n', 'utf8');
+    check('老字段名 event_description 也认', readTopicHint({ memoryRoot: fakeRoot }).includes('老字段写法也要认得出来'), true);
+
+    rmSync(join(fakeRoot, '日记.md'));
+    rmSync(join(fakeRoot, '生长', '状态.md'));
+    check('档案在但两个文件都没有 → 空', readTopicHint({ memoryRoot: fakeRoot }), '');
+  } finally {
+    rmSync(fakeRoot, { recursive: true, force: true });
+  }
+
+  // ── 回读（"一次想完再说"的坎）：全用假会话，不碰真环境 ──
+  check('时间：秒级 → 换算成毫秒', normMs(1_700_000_000) > 1e12, true);
+  check('时间：毫秒级 → 原样', normMs(1_700_000_000_000), 1_700_000_000_000);
+  check('时间：认不出来 → 0', normMs('x'), 0);
+
+  /** 造假 agent：events 可以是函数（模拟"模型还在写，事件渐渐变多"）。 */
+  const fakeAgent = (events) => ({
+    session: {
+      snapshotEvents: typeof events === 'function' ? events : () => events,
+      deriveEventMessage: (ev) => ({ role: 'assistant', content: ev.data?.message?.content ?? ev.data?.content }),
+    },
+  });
+  const asst = (text, time) => ({ type: 'assistant/message', time, data: { message: { role: 'assistant', content: [{ type: 'text', text }] } } });
+  const user = (text, time) => ({ type: 'user/message', time, data: { content: [{ type: 'text', text }] } });
+
+  // ① 秒级时间戳 + 毫秒级 sinceMs：修之前会因为"全部事件都比注入时刻早"而读回 0 字
+  {
+    const tSec = 1_700_000_000;
+    const agent = fakeAgent([user('注入', tSec), asst('第一句', tSec + 1), asst('第二句', tSec + 2)]);
+    const got = await readLastAssistantText(agent, tSec * 1000 + 500);
+    check('事件时间是秒级也能读回来（不再读回 0 字）', got.includes('第一句') && got.includes('第二句'), true);
+  }
+  // ② 回复被拆成多条 assistant/message → 要拼全，不能只剩开头
+  {
+    const t = 1_700_000_000_000;
+    const agent = fakeAgent([user('注入', t), asst('前半句', t + 1000), asst('后半句', t + 2000)]);
+    const got = await readLastAssistantText(agent, t + 500);
+    check('回复被拆成多条 → 拼全', got.includes('前半句') && got.includes('后半句'), true);
+  }
+  // ③ 事件里混着 reasoning 块 → 只取 text，绝不把思考当话
+  {
+    const t = 1_700_000_000_000;
+    const agent = fakeAgent([{
+      type: 'assistant/message',
+      time: t + 1000,
+      data: { message: { role: 'assistant', content: [{ type: 'reasoning', text: '让我先想想' }, { type: 'text', text: '正文在这儿' }] } },
+    }]);
+    const got = await readLastAssistantText(agent, t + 500);
+    check('混着 reasoning → 只留正文', got.includes('正文在这儿') && !got.includes('让我先想想'), true);
+  }
+  // ④ 等到"整回合写完"才返回：看到 ⟪分段⟫ 就停，不必傻等满 45 秒
+  {
+    const t = 1_700_000_000_000;
+    let step = 0;
+    const agent = fakeAgent(() => {
+      step += 1;
+      return step === 1 ? [asst('第一句', t + 1000)] : [asst(`第一句${SEGMENT_MARK}第二句`, t + 2000)];
+    });
+    const { text, stable } = await waitForAssistantText(agent, t + 500, { timeoutMs: 20_000, intervalMs: 10, sleep: async () => {} });
+    check('轮询到 ⟪分段⟫ 就返回（不傻等）', stable && text.includes(SEGMENT_MARK), true);
+  }
+  // ⑤ 一直读不到 → 超时返回空，交给调用方降级（不能卡死）
+  {
+    const agent = fakeAgent([]);
+    const { text, stable } = await waitForAssistantText(agent, 0, { timeoutMs: 50, intervalMs: 10, sleep: async () => {} });
+    check('读不到就超时返回空（不卡死，交给降级）', text === '' && stable === false, true);
+  }
 
   const passed = results.filter((r) => r.ok).length;
   for (const r of results) {
@@ -1288,5 +1620,10 @@ export function runSelftest() {
 
 const invokedDirectly = process.argv[1] !== undefined && process.argv[1].endsWith('index.js');
 if (invokedDirectly && process.argv.includes('--selftest')) {
-  process.exitCode = runSelftest() ? 0 : 1;
+  // 2026-10-03：自检里有异步断言（回读那几条）→ 改成 Promise，退出码按结果设
+  runSelftest().then((ok) => { process.exitCode = ok ? 0 : 1; }, (error) => {
+    // eslint-disable-next-line no-console
+    console.error(`自检崩了：${error instanceof Error ? error.stack : String(error)}`);
+    process.exitCode = 1;
+  });
 }

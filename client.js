@@ -88,13 +88,43 @@ window.__ModuleLoader__.load({
             }
           };
 
-          // ③ （2026-10-01 用户改主意）：**不藏思考了**。
+          // ③ 一次生成（deliverMode: 'once'）时：模型把整个回合**一次写完**，句间用 ⟪分段⟫ 隔开。
+          //    这个标记是给插件看的，给人看就是乱码 —— 这里把它**显示成分段**（每段独立一行）。
+          //    ⚠ 只改**文本节点**，不动元素结构（React 树动不得，动错就 removeChild 报错／白屏）；
+          //      只碰**确实含这个标记**的节点；全程 try/catch；改完打标记，不重复处理。
+          const SEG = '⟪分段⟫';
+          const splitSegmentsInBubbles = () => {
+            try {
+              const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+              const hits = [];
+              while (walker.nextNode()) {
+                const node = walker.currentNode;
+                if (node.nodeValue && node.nodeValue.indexOf(SEG) >= 0) hits.push(node);
+              }
+              for (let i = 0; i < hits.length; i += 1) {
+                const node = hits[i];
+                if (node.__selfwakeSplit) continue;
+                node.__selfwakeSplit = true;
+                const parts = String(node.nodeValue).split(SEG).map((s) => s.trim()).filter((s) => s !== '');
+                if (parts.length < 2) continue;
+                // 用父节点的 white-space 保住换行：分段之间显示成空一行
+                const parent = node.parentNode;
+                if (parent && parent.style) parent.style.whiteSpace = 'pre-wrap';
+                node.nodeValue = parts.join('\n\n');
+                console.info('[selfwake] 把一次生成的回复按段显示了（共 ' + parts.length + ' 段）');
+              }
+            } catch (error) {
+              /* 显示层失败不影响对话本身：最坏只是看到那个标记 */
+            }
+          };
+
+          // ④ （2026-10-01 用户改主意）：**不藏思考了**。
           //  用户原话：「3 能不能让你的思考接近这种但是不能公式：22:22了，用户还没理我」
           //   —— 要的不是"把思考藏起来"，而是让思考**有角色感**。
           //   而思考的腔调是被"注入文本"带出来的（注入写成任务单 → 思考就是工作腔），
           //   所以这件事归 `index.js` 的 composeSituation / composePrompt 管，这里不动 DOM。
 
-          const run = () => { flushQueue(); hideInject(); };
+          const run = () => { flushQueue(); hideInject(); splitSegmentsInBubbles(); };
           run();
           const observer = new MutationObserver(run);
           observer.observe(document.body, { childList: true, subtree: true });
