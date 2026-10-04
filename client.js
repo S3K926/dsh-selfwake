@@ -99,14 +99,35 @@ window.__ModuleLoader__.load({
               const hits = [];
               while (walker.nextNode()) {
                 const node = walker.currentNode;
-                if (node.nodeValue && node.nodeValue.indexOf(SEG) >= 0) hits.push(node);
+                if (node.nodeValue && node.nodeValue.indexOf(SEG) >= 0 && !node.__selfwakeSplit) hits.push(node);
               }
               for (let i = 0; i < hits.length; i += 1) {
                 const node = hits[i];
-                if (node.__selfwakeSplit) continue;
-                node.__selfwakeSplit = true;
+                // ⚠ 代码块／行内代码里的标记是**内容**（比如我们自己在对话里讨论这个标记本身），
+                //   不能被吃掉 —— 只处理正文里的那些。
+                if (node.parentElement && node.parentElement.closest('code, pre')) continue;
                 const parts = String(node.nodeValue).split(SEG).map((s) => s.trim()).filter((s) => s !== '');
-                if (parts.length < 2) continue;
+                // ⚠⚠ 2026-10-04 修（她报「问题是我能看到」）：
+                //   markdown 会把 `⟪分段⟫` **单独渲染成一个段落**（它前后都是换行）→ 那种文本节点
+                //   **整个就是标记**，split 完只剩空串（parts.length === 0）。旧写法对这种情况直接
+                //   `continue`，标记就永久留在页面上 —— 而且 `__selfwakeSplit` 是在 continue **之前**
+                //   置位的，等于这一条再也不会被处理（她自己看到了那个标记，就是这一支漏的）。
+                //   → 这种"只剩标记"的节点：清空它，并且把它那个空段落一起藏掉（免得留一条空行）。
+                if (parts.length === 0) {
+                  node.nodeValue = '';
+                  const block = node.parentElement;
+                  if (block && block.textContent.trim() === '' && block.style) block.style.display = 'none';
+                  node.__selfwakeSplit = true;
+                  console.info('[selfwake] 清掉了一处露在页面上的分段标记');
+                  continue;
+                }
+                // 标记在开头／结尾（拆完只剩一段）：把标记吃掉就好。
+                if (parts.length === 1) {
+                  node.nodeValue = parts[0];
+                  node.__selfwakeSplit = true;
+                  continue;
+                }
+                node.__selfwakeSplit = true;
                 // 用父节点的 white-space 保住换行：分段之间显示成空一行
                 const parent = node.parentNode;
                 if (parent && parent.style) parent.style.whiteSpace = 'pre-wrap';
