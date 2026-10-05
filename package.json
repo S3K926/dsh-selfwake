@@ -1,46 +1,48 @@
 {
-  "name": "dsh-selfwake",
-  "version": "0.1.0",
-  "description": "DSH 插件：到点主动开口 —— 五道闸（随机间隔／安静／未回上限／静默时段／每日上限）过了就注入「状态＋约束」，话由模型当场说；支持一个回合分几次发",
-  "type": "module",
-  "main": "index.js",
-  "license": "MIT",
-  "dependencies": {
-    "@deepseek-ai/dsh-session": "^0.2.0-rc.1"
-  },
-  "keywords": [
-    "dsh",
-    "deepseek-harness",
-    "cordis-plugin",
-    "selfwake",
-    "proactive"
-  ],
-  "exports": {
-    ".": "./index.js",
-    "./client": "./client.js",
-    "./package.json": "./package.json"
-  },
-  "files": [
-    "index.js",
-    "client.js",
-    "cordis.patch.yml",
-    "pool-默认.txt",
-    "README.md",
-    "LICENSE"
-  ],
-  "dsh": {
-    "bundle": {
-      "patch": "./cordis.patch.yml"
+    "name": "dsh-selfwake",
+    "version": "0.1.0",
+    "description": "DSH 插件：到点主动开口 —— 五道闸（随机间隔／安静／未回上限／静默时段／每日上限）过了就注入「状态＋约束」，话由模型当场说；支持一个回合分几次发",
+    "type": "module",
+    "main": "index.js",
+    "license": "MIT",
+    "dependencies": {
+        "@deepseek-ai/dsh-session": "^0.2.0-rc.1"
     },
-    "client": {
-      "platform": "web"
-    }
-  },
-  "engines": {
-    "node": ">=22"
-  },
-  "peerDependencies": {
-    "@deepseek-ai/dsh-agent": "^0.2.0-rc.1",
-    "@deepseek-ai/dsh-session": "^0.2.0-rc.1"
-  }
+    "keywords": [
+        "dsh",
+        "deepseek-harness",
+        "cordis-plugin",
+        "selfwake",
+        "proactive"
+    ],
+    "exports": {
+        ".": "./index.js",
+        "./client": "./client.js",
+        "./package.json": "./package.json"
+    },
+    "files": [
+        "index.js",
+        "client.js",
+        "cordis.patch.yml",
+        "pool-默认.txt",
+        "README.md",
+        "LICENSE"
+    ],
+    "dsh": {
+        "bundle": {
+            "patch": "./cordis.patch.yml"
+        },
+        "client": {
+            "platform": "web"
+        }
+    },
+    "engines": {
+        "node": ">=22",
+        "dsh": ">=0.1.7-rc.2"
+    },
+    "peerDependencies": {
+        "@deepseek-ai/dsh-agent": "^0.2.0-rc.1",
+        "@deepseek-ai/dsh-session": "^0.2.0-rc.1"
+    },
+    "author": "S3K926"
 }
