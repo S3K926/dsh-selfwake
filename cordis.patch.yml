@@ -1,0 +1,4 @@
+# 说明同 dsh-memory-board 的 cordis.patch.yml：只做"把插件挂进来"这一件事。
+- insert:
+    - id: selfwake
+      name: dsh-selfwake
