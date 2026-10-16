@@ -107,11 +107,11 @@ window.__ModuleLoader__.load({
                 //   不能被吃掉 —— 只处理正文里的那些。
                 if (node.parentElement && node.parentElement.closest('code, pre')) continue;
                 const parts = String(node.nodeValue).split(SEG).map((s) => s.trim()).filter((s) => s !== '');
-                // ⚠⚠ 2026-10-04 修（她报「问题是我能看到」）：
+                // ⚠⚠ 2026-10-04 修（用户报「问题是我能看到」）：
                 //   markdown 会把 `⟪分段⟫` **单独渲染成一个段落**（它前后都是换行）→ 那种文本节点
                 //   **整个就是标记**，split 完只剩空串（parts.length === 0）。旧写法对这种情况直接
                 //   `continue`，标记就永久留在页面上 —— 而且 `__selfwakeSplit` 是在 continue **之前**
-                //   置位的，等于这一条再也不会被处理（她自己看到了那个标记，就是这一支漏的）。
+                //   置位的，等于这一条再也不会被处理（用户自己看到了那个标记，就是这一支漏的）。
                 //   → 这种"只剩标记"的节点：清空它，并且把它那个空段落一起藏掉（免得留一条空行）。
                 if (parts.length === 0) {
                   node.nodeValue = '';

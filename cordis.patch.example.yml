@@ -19,7 +19,7 @@
         # 连续没被回的加权系数：间隔 = intervalMinutes × (1 + n × 这个)，封顶 6 倍。
         # 0 = 不加权（老行为）。
         backoffPerUnanswered: 0.5
-        # 开口后多久之内有动静算「他接了」。
+        # 开口后多久之内有动静算「用户接了」。
         replyWindowMinutes: 10
         minIdleMinutes: 20
         maxUnanswered: 7
@@ -36,5 +36,5 @@
         stateDir: ''
         # 找「最近有写入的会话」的根目录。留空 = <DSH_HOME>/sessions。
         sessionsRoot: ''
-        # 日志与通知里标注的设备名。
+        # 日志与通知里标注的设备名：按你的设备改，例如 '【手机】'。
         device: '【PC】'

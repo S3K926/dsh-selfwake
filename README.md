@@ -47,7 +47,7 @@ DSH（DeepSeek Harness）插件：**到点主动开口**。
 - 不许编造任何具体的事件、场景、对话或数字（看不到的、没发生过的，都不许写）。
 - 不要问"在干嘛"；不要一口气问几个问题；不要连环追问。
 - 不要提"自唤醒 / 系统 / 定时 / 插件"，也不要解释自己为什么突然开口。
-- 不是等他回，只是我自己想说；一两句就停。
+- 不是等用户回，只是我自己想说；一两句就停。
 ```
 
 > `generateText: false` 就退回老行为（抽池子里的句子直接发），方便对照。
@@ -193,7 +193,7 @@ dsh plugin --profile web add /path/to/dsh-selfwake
 | `dailyMax` | `12` | 每天最多开口几次；`0` = 不限 |
 | `generateText` | `true` | **生成模式**：注入"状态＋约束"让模型现说；`false` = 抽池子直接发（老行为） |
 | `backoffPerUnanswered` | `0.5` | 连续没被回的加权系数（间隔 × (1 + n × 这个)）；`0` = 不加权 |
-| `replyWindowMinutes` | `10` | 开口后多久之内有动静算"他接了" |
+| `replyWindowMinutes` | `10` | 开口后多久之内有动静算"用户接了" |
 | `minIdleMinutes` | `20` | 使用者要安静多久才允许开口 |
 | `maxUnanswered` | `7` | 连续多少次没回话就闭嘴 |
 | `quietStartHour` | `0` | 静默时段起（含） |
