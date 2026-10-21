@@ -47,7 +47,7 @@ DSH（DeepSeek Harness）插件：**到点主动开口**。
 - 不许编造任何具体的事件、场景、对话或数字（看不到的、没发生过的，都不许写）。
 - 不要问"在干嘛"；不要一口气问几个问题；不要连环追问。
 - 不要提"自唤醒 / 系统 / 定时 / 插件"，也不要解释自己为什么突然开口。
-- 不是等用户回，只是我自己想说；一两句就停。
+- 不是等他回，只是我自己想说；一两句就停。
 ```
 
 > `generateText: false` 就退回老行为（抽池子里的句子直接发），方便对照。
@@ -145,7 +145,7 @@ DSH（DeepSeek Harness）插件：**到点主动开口**。
 |---|---|---|---|
 | ① 间隔 | `intervalMinutes` ± `jitterMinutes`，再按 `backoffPerUnanswered` 加权 | 20 ± 8 | 距上次开口 ≥ 摇出来的那个间隔（可复现的随机） |
 | ② 安静 | `minIdleMinutes` | 20 | 使用者安静 ≥ 这么多分钟（看 DSH 会话日志的最新写入时间） |
-| ③ 未回上限 | `maxUnanswered` | 7 | 连续没回话的次数 < 上限 |
+| ③ 未回上限 | `maxUnanswered` | 3 | 连续没回话的次数 < 上限（2026-10-21 从 7 调到 3） |
 | ④ 时段 | `quietStartHour` / `quietEndHour` | 0 / 7 | 不在静默时段内 |
 | ⑤ 每日上限 | `dailyMax` | 12 | 今天开口次数 < 上限（`0` = 不限），跨天自动归零 |
 
@@ -193,9 +193,9 @@ dsh plugin --profile web add /path/to/dsh-selfwake
 | `dailyMax` | `12` | 每天最多开口几次；`0` = 不限 |
 | `generateText` | `true` | **生成模式**：注入"状态＋约束"让模型现说；`false` = 抽池子直接发（老行为） |
 | `backoffPerUnanswered` | `0.5` | 连续没被回的加权系数（间隔 × (1 + n × 这个)）；`0` = 不加权 |
-| `replyWindowMinutes` | `10` | 开口后多久之内有动静算"用户接了" |
+| `replyWindowMinutes` | `10` | 开口后多久之内有动静算"他接了" |
 | `minIdleMinutes` | `20` | 使用者要安静多久才允许开口 |
-| `maxUnanswered` | `7` | 连续多少次没回话就闭嘴 |
+| `maxUnanswered` | `3` | 连续多少次没回话就闭嘴（2026-10-21 从 7 调到 3） |
 | `quietStartHour` | `0` | 静默时段起（含） |
 | `quietEndHour` | `7` | 静默时段止（不含） |
 | `notify` | `true` | 投不进会话时是否发系统通知 |
@@ -210,7 +210,7 @@ dsh plugin --profile web add /path/to/dsh-selfwake
 
 ## 通知脚本约定
 
-`notifyScript` 会被这样调用（Windows）：
+`notifyScript` 会被这样调用（下面这个示例是 **Windows PowerShell** 版；别的平台自己写一个等价的，参数就是标题、正文、静默标志）：
 
 ```
 powershell -NoProfile -ExecutionPolicy Bypass -File <notifyScript> -Title <标题> -Body <正文>
@@ -228,7 +228,7 @@ node index.js --selftest
 
 - **叫不醒睡着的电脑**：定时器活在进程里，电脑得开着、DSH 得在跑。
 - **窗口关着时投不进会话**：那时没有活跃 agent 可投，会退成通知，日志里写明原因。
-- 它**不碰会话正文**：判断"使用者是否安静"只看会话文件的修改时间。
+- 它**不碰会话正文**：判断"使用者是否安静"看的是**最后一条真实 `user/message` 事件的时间**（`realUserActivityMs()`），不是会话文件的修改时间——旧版用的是 mtime，会被"会话被我自己写过"误判成刚活跃。
 
 ## 许可
 

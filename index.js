@@ -1,9 +1,9 @@
 /**
  * `dsh-selfwake` · Host 半边（电脑版，照同类实现的既有规则 `dsha-selfwake` 的规矩重写）
  *
- * 它干什么：每 `tickSeconds` 检查一次，四道闸全过就"开口"——发一条风铃 + 写一行日志。
+ * 它干什么：每 `tickSeconds` 检查一次，五道闸全过就"开口"——发一条风铃 + 写一行日志。
  *
- * 四道闸（照同类实现的既有规则，数值抄手机）：
+ * 五道闸（照同类实现的既有规则，数值抄手机）：
  *   ① 距上次开口 ≥ `intervalMinutes`（默认 20）**± `jitterMinutes`（默认 8）**
  *      —— 2026-09-30 新增：间隔不再是死数，每次开口后摇一个区间（20 → 12~28 分），
  *         摇出来的值**可复现**（同一个 sessionId + 同一轮 hash 出同一个数，排查时对得上）。
@@ -51,10 +51,10 @@ export const DEFAULTS = {
    * 0 = 退回固定间隔。理由：连着几条没被接就该往后缩，而不是更频繁地追。
    */
   backoffPerUnanswered: 0.5,
-  /** 上一次开口之后多久之内有动静，算"用户接了我的话"。 */
+  /** 上一次开口之后多久之内有动静，算"他接了我的话"。 */
   replyWindowMinutes: 10,
   minIdleMinutes: 20,
-  maxUnanswered: 7,
+  maxUnanswered: 3,   // 2026-10-21：7 → 3，连续三次没人接就闭嘴
   quietStartHour: 0,
   quietEndHour: 7,
   notify: true,
@@ -960,7 +960,7 @@ export function parseRoundIntent(angle, max = MAX_SEGMENTS) {
  *   ① "思考像是在执行指令，而内容又不一样" —— 因为老版本是一张**任务单**
  *      （规则清单 ＋ 角度参考 ＋ 分段指令）→ 模型的思考自然变成"我在执行任务"，
  *      内容却另写一套，两边对不上。
- *   ② "（自己开口）我是大肥鱼。这个不要" ＋ "能不能像这样而且不是固定的：
+ *   ② "（自己开口）我是助手。这个不要" ＋ "能不能像这样而且不是固定的：
  *      22:53了，用户一直没找我说话。我要问问用户在干嘛怎么这么久都没有来找我说话"
  *      —— 用户要的是**当下处境**（几点、ta 多久没来、我什么心情、我想干嘛），
  *      措辞**每次都不一样**，由模型自己组织，而不是套一句固定模板。
@@ -969,7 +969,7 @@ export function parseRoundIntent(angle, max = MAX_SEGMENTS) {
  * `pool-默认.txt` 与 README 里长期生效，不再每次糊进注入。
  *
  *   ⚠ 2026-10-04 修正：**"别提工作／正事"是例外，它必须留在注入里** ——
- *     池子不进注入之后，铁律七跟着一起失效，自唤醒开口就谈起工作来了（用户当天点破：
+ *     池子不进注入之后，铁律七跟着一起失效，自唤醒开口就谈起工作来了（她当天点破：
  *     「之前不是提了要求是自唤醒不能谈工作」）。
  */
 /**
@@ -1047,7 +1047,7 @@ export function composePrompt(now, st, live, angle, seg, situation) {
   const body = `${situ.join('，')}。`;
   // 护栏（两句，措辞都随机）—— 写成清单我就会开始"照章办事"
   const guard = pickOne(['别编。', '说真的。', '不许骗自己。']);
-  // 🔴 2026-10-04 用户点破：「之前不是提了要求是自唤醒不能谈工作」
+  // 🔴 2026-10-04 她点破：「之前不是提了要求是自唤醒不能谈工作」
   //   这条原本只写在 `pool-默认.txt` 的铁律七（"不许提正事"），但 2026-10-03 起池子**不再进注入**，
   //   护栏实际失守 —— 那轮注入只剩感知碎片＋"说真的"，我就顺着满屏的工作上下文把工作反思说了出来。
   //   → 硬边界放回注入（短句、随机，不做成清单）。
@@ -1243,7 +1243,7 @@ export function apply(ctx, input = {}) {
     const segCount = useGen ? randomSegCount(now, st) : 1;
     const firstSeg = useGen ? { index: 0, total: segCount, intent: said } : null;
     // once 模式：**唯一的格式要求**——一次把整个回合写完，句间用 ⟪分段⟫ 隔开。
-    // 措辞刻意压到最短、放在最后（用户的老意见：注入一像任务单，思考就变成"我在执行指令"）。
+    // 措辞刻意压到最短、放在最后（她的老意见：注入一像任务单，思考就变成"我在执行指令"）。
     let text = useGen ? composePrompt(now, st, live, said, firstSeg, situation) : line;
     if (useGen && live.deliverMode === 'once' && segCount > 1) {
       text = `${text}\n（这一次把你整个回合想说的 ${segCount} 句话一次说完，句与句之间用 ${SEGMENT_MARK} 隔开。）`;
@@ -1271,19 +1271,19 @@ export function apply(ctx, input = {}) {
     const t = setTimeout(async () => {
       try {
         let guard = 0;
-        // 2026-10-02 改（用户点破的）：**每一段抽不同的内容方向**。
+        // 2026-10-02 改（她点破的）：**每一段抽不同的内容方向**。
         //   原来整个回合共用池子抽到的那一条 → 三条注入都是"想说今天有点无聊"，
         //   我只能同一件事换三种语气（"今天好无聊啊" / "……有点无聊" / "……无聊"），读起来像复读。
         //   现在每段各抽一条（`pickLine` 会避开上一段那条），于是三句各说一件、又都在同一个处境里。
         let prevLine = line;
         for (let idx = 1; idx < segCount && guard < MAX_SEGMENTS; idx += 1) {
           guard += 1;
-          // 投之前重新判一次：这中间用户要是说话了，就停下、别打扰
+          // 投之前重新判一次：这中间他要是说话了，就停下、别打扰
           const stFresh = readJson(state, st);
           const h = safeAgentFor(sessionId);
           const act = h ? await realUserActivityMs(h) : 0;
           if (act > (stFresh.lastFiredAt ?? 0)) {
-            say('[round] 用户说话了 → 停掉本回合剩下的段');
+            say('[round] 他说话了 → 停掉本回合剩下的段');
             break;
           }
           const segLine = pickLine(pool, prevLine);
@@ -1443,7 +1443,7 @@ export async function runSelftest() {
   const variants = new Set([0, 1, 2, 7, 13, 29].map((m) => composePrompt(new Date(now.getTime() + m * 60_000), pState, cfgBack, '说一句我此刻的状态')));
   check('换几个时刻 → 抓到的碎片不一样（不是固定模板）', variants.size >= 2, true);
   check('同一时刻同一段 → 可复现（事后能对上账）', composePrompt(later, pState, cfgBack, '说一句我此刻的状态') === composePrompt(later, pState, cfgBack, '说一句我此刻的状态'), true);
-  check('不再有固定的「我是大肥鱼」开场', prompt.includes('我是大肥鱼'), false);
+  check('不再有固定的开场自称', prompt.includes('我是助手'), false);
   check('不再是一张规则清单（没有"傲娇递进："这种条目）', /- \*\*傲娇递进/.test(prompt), false);
 
   // ── 2026-09-30 第三轮：回合分段（多段分开发的解析层）────────────────
@@ -1522,7 +1522,7 @@ export async function runSelftest() {
 
   // ── 话题方向（2026-10-03 加）：全部在临时目录里造假档案，不碰真档案 ──
   check('提炼：去掉条目符号与括号补充', sanitizeTopic('- ① 去弄那个（晚点再说）'), '去弄那个');
-  check('提炼：去掉 Windows 路径', sanitizeTopic('改 D:\\notes\\日记.md 那处'), '改 那处');
+  check('提炼：去掉 Windows 路径', sanitizeTopic('改 C:\\Users\\me\\docs\\日记.md 那处'), '改 那处');
   check('提炼：硬截断到 24 字', sanitizeTopic('一二三四五六七八九十一二三四五六七八九十一二三四五六').length <= 25, true);
   check('提炼：空文本 → 空', sanitizeTopic('   '), '');
   check('读不到档案（目录不存在）→ 空，不抛', readTopicHint({ memoryRoot: join(tmpdir(), '肯定没有这个目录-selfwake') }), '');
@@ -1531,16 +1531,16 @@ export async function runSelftest() {
   const fakeRoot = mkdtempSync(join(tmpdir(), 'selfwake-topic-'));
   try {
     mkdirSync(join(fakeRoot, '生长'), { recursive: true });
-    writeFileSync(join(fakeRoot, '生长', '状态.md'), '# **挂着的**\n- ① 把插件改动推 GitHub（用户定的口径：全部弄好再推）\n- ② 别的\n', 'utf8');
+    writeFileSync(join(fakeRoot, '生长', '状态.md'), '# **挂着的**\n- ① 把插件改动推 GitHub（她定的口径：全部弄好再推）\n- ② 别的\n', 'utf8');
     check('状态里有「挂着的」→ 取第一条', readTopicHint({ memoryRoot: fakeRoot }).includes('把插件改动推 GitHub'), true);
 
     // 状态里没有 → 退回日记最后一条的"这一轮干了什么"
     writeFileSync(join(fakeRoot, '生长', '状态.md'), '# 状态\n什么都没挂着。\n', 'utf8');
-    writeFileSync(join(fakeRoot, '日记.md'), '### #1 ｜ 2026-10-01 ｜ 10:00 ｜ <设备> ｜ full\n\n**这一轮干了什么**\n- 一起把备份目录理了一遍\n', 'utf8');
+    writeFileSync(join(fakeRoot, '日记.md'), '### #1 ｜ 2026-10-01 ｜ 10:00 ｜ 【PC】 ｜ full\n\n**这一轮干了什么**\n- 一起把备份目录理了一遍\n', 'utf8');
     check('状态没有 → 退回最后一条日记', readTopicHint({ memoryRoot: fakeRoot }).includes('一起把备份目录理了一遍'), true);
 
     // 字段写法换了（老格式 event_description）也要认
-    writeFileSync(join(fakeRoot, '日记.md'), '### #2 ｜ 2026-10-02 ｜ 10:00 ｜ <设备> ｜ full\n\n**event_description**\n- 老字段写法也要认得出来\n', 'utf8');
+    writeFileSync(join(fakeRoot, '日记.md'), '### #2 ｜ 2026-10-02 ｜ 10:00 ｜ 【PC】 ｜ full\n\n**event_description**\n- 老字段写法也要认得出来\n', 'utf8');
     check('老字段名 event_description 也认', readTopicHint({ memoryRoot: fakeRoot }).includes('老字段写法也要认得出来'), true);
 
     rmSync(join(fakeRoot, '日记.md'));
