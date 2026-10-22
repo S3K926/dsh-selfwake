@@ -54,7 +54,7 @@ export const DEFAULTS = {
   /** 上一次开口之后多久之内有动静，算"他接了我的话"。 */
   replyWindowMinutes: 10,
   minIdleMinutes: 20,
-  maxUnanswered: 3,   // 2026-10-21：7 → 3，连续三次没人接就闭嘴
+  maxUnanswered: 3,   // 2026-10-21：7 → 3，连续三次没人接就闭嘴（他备考，宁可少说）
   quietStartHour: 0,
   quietEndHour: 7,
   notify: true,
@@ -421,7 +421,9 @@ export function nextAllowedAtFor(nowMs, live, sessionKey, firedCount, unanswered
 
 /** 闸门：全过才开口。返回 { fire, why }。 */
 export function evaluateGates(now, cfg, state, lastActivityMs) {
-  const quiet = now.getHours() >= cfg.quietStartHour && now.getHours() < cfg.quietEndHour;
+  // 2026-10-21 修：原来 `h >= start && h < end` 在「23 到 7」这种跨午夜配置下永远为假（等于没静默）。
+  const inQuiet = (h, a, b) => (a <= b ? h >= a && h < b : h >= a || h < b);
+  const quiet = inQuiet(now.getHours(), cfg.quietStartHour, cfg.quietEndHour);
   if (!cfg.enabled) return { fire: false, why: '开关关着' };
   if (quiet) return { fire: false, why: `静默时段（${cfg.quietStartHour}–${cfg.quietEndHour} 点）` };
   // ① 间隔：优先用"上次开口时摇出来的那个点"（随机、可复现）；没有就退回固定间隔（老行为）
@@ -437,7 +439,12 @@ export function evaluateGates(now, cfg, state, lastActivityMs) {
       return { fire: false, why: `距上次开口仅 ${Math.round(sinceFire / 60_000)} 分钟（这次要 ≥${Math.round(needMs / 60_000)}）` };
     }
   }
-  const idle = lastActivityMs ? now.getTime() - lastActivityMs : Infinity;
+  // 2026-10-21 修：原来读不到活动时间就当 Infinity（"很久没说话"）→ 可能在他正聊着时开口。
+  // 读不到 ≠ 没人，保守不开。
+  if (!lastActivityMs) {
+    return { fire: false, why: '读不到用户活动时间（保守不开）' };
+  }
+  const idle = now.getTime() - lastActivityMs;
   if (idle < cfg.minIdleMinutes * 60_000) {
     return { fire: false, why: `使用者 ${Math.round(idle / 60_000)} 分钟前还在说话（要安静 ≥${cfg.minIdleMinutes} 分钟）` };
   }
