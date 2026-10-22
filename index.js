@@ -1386,6 +1386,12 @@ export async function runSelftest() {
   check('未回话到上限 → 不开', evaluateGates(now, cfg, { lastFiredAt: now.getTime() - 30 * 60_000, unanswered: 3 }, now.getTime() - 30 * 60_000).fire, false);
   check('凌晨 3 点 → 不开', evaluateGates(new Date('2026-09-26T03:00:00'), cfg, { lastFiredAt: 0, unanswered: 0 }, 0).fire, false);
   check('开关关掉 → 不开', evaluateGates(now, resolveConfig({ enabled: false }), { lastFiredAt: 0, unanswered: 0 }, 0).fire, false);
+  // 2026-10-21 补：跨午夜静默（23–7）与「读不到活动时间」
+  const cfgNight = resolveConfig({ quietStartHour: 23, quietEndHour: 7, intervalMinutes: 20, minIdleMinutes: 20 });
+  check('跨午夜静默 23–7：凌晨 2 点不开', evaluateGates(new Date('2026-09-26T02:00:00'), cfgNight, { lastFiredAt: 0, unanswered: 0 }, new Date('2026-09-26T02:00:00').getTime() - 3600_000).fire, false);
+  check('跨午夜静默 23–7：晚上 23:30 不开', evaluateGates(new Date('2026-09-26T23:30:00'), cfgNight, { lastFiredAt: 0, unanswered: 0 }, new Date('2026-09-26T23:30:00').getTime() - 3600_000).fire, false);
+  check('跨午夜静默 23–7：中午 12 点不受影响', evaluateGates(new Date('2026-09-26T12:00:00'), cfgNight, { lastFiredAt: 0, unanswered: 0 }, new Date('2026-09-26T12:00:00').getTime() - 3600_000).fire, true);
+  check('活动时间读不到（0）→ 保守不开', evaluateGates(now, cfg, { lastFiredAt: now.getTime() - 30 * 60_000, unanswered: 0 }, 0).fire, false);
 
   // ── 2026-09-30 新增：随机间隔（可复现）＋ 每日上限 ──────────────────
   const a = rollIntervalMs(20, 8, 'sessA|wake|1');

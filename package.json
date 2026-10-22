@@ -1,6 +1,6 @@
 {
   "name": "dsh-selfwake",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "DSH 插件：到点主动开口 —— 五道闸（随机间隔／安静／未回上限／静默时段／每日上限）过了就注入「状态＋约束」，话由模型当场说；支持一个回合分几次发",
   "type": "module",
   "main": "index.js",
