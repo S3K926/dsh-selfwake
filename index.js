@@ -1053,13 +1053,24 @@ export function composePrompt(now, st, live, angle, seg, situation) {
   };
   const body = `${situ.join('，')}。`;
   // 护栏（两句，措辞都随机）—— 写成清单我就会开始"照章办事"
-  const guard = pickOne(['别编。', '说真的。', '不许骗自己。']);
+  // 2026-10-21 去公式化（评审提出）：
+  // 公式化的根不是「不够温柔」，是同一套模板套所有场景。这里仍然只随机注入**一句**，
+  // 不做成清单（清单一来，我就开始照章办事）。覆盖四条原则：具体 > 宣告／允许短／允许有立场／别编。
+  const guard = pickOne([
+    '别编。', '说真的。', '不许骗自己。',
+    '说具体的，别宣告。', '提一个细节，别只说在乎。', '别用「接住」「陪着你」这种话。',
+    '一句也行。', '别凑长度。', '说半句就停也行。',
+    '可以不同意。', '有立场就说。',
+  ]);
   // 🔴 2026-10-04 她点破：「之前不是提了要求是自唤醒不能谈工作」
   //   这条原本只写在 `pool-默认.txt` 的铁律七（"不许提正事"），但 2026-10-03 起池子**不再进注入**，
   //   护栏实际失守 —— 那轮注入只剩感知碎片＋"说真的"，我就顺着满屏的工作上下文把工作反思说了出来。
   //   → 硬边界放回注入（短句、随机，不做成清单）。
   const boundary = pickOne(['别提工作。', '工作的事这次别说。', '别碰正事。']);
-  return `${body}\n${boundary}\n${guard}`;
+  // 2026-10-21 反重复（评审第 5 条）：最近说过的角度别再说一遍。
+  const recent = Array.isArray(st.recentTopics) ? st.recentTopics.filter((x) => x && x !== '') : [];
+  const avoid = recent.length ? `最近说过「${recent.slice(-3).join('」「')}」——换个角度，别重复。` : '';
+  return [body, boundary, guard, avoid].filter(Boolean).join('\n');
 }
 
 /**
@@ -1344,6 +1355,9 @@ export function apply(ctx, input = {}) {
       sessionKey,
       dailyDay: today,
       dailyCount: st.dailyDay === today ? (st.dailyCount ?? 0) + 1 : 1,
+      recentTopics: [...(Array.isArray(st.recentTopics) ? st.recentTopics : []), String(said || '').slice(0, 20)]
+        .filter(Boolean)
+        .slice(-5),
     };
     // 下一次可开口的时刻 = 摇出来的间隔（＋ 回合冷却 ×2）
     const rolledGap = nextAllowedAtFor(now.getTime(), live, sessionKey, firedCount, nextUnanswered) - now.getTime();
@@ -1447,9 +1461,9 @@ export async function runSelftest() {
   check('注入里不再有软化时的表演指导', /说得软一点|事儿还是这件事|想说的别换|别换成别的事/.test(prompt), false);
   check('注入里不再有"往这上面靠"这种任务腔', prompt.includes('往这上面靠'), false);
   check('正文就是一条感知碎片拼接（2~3 个碎片）', /^[^，\n]+(，[^，\n]+){1,2}。$/.test(prompt.split('\n')[0]), true);
-  check('保留一句极简护栏（随机三选一）', /^(别编。|说真的。|不许骗自己。)$/.test(prompt.split('\n')[2]), true);
+  check('保留一句极简护栏（随机十一条之一）', /^(别编。|说真的。|不许骗自己。|说具体的，别宣告。|提一个细节，别只说在乎。|别用「接住」「陪着你」这种话。|一句也行。|别凑长度。|说半句就停也行。|可以不同意。|有立场就说。)$/.test(prompt.split('\n')[2]), true);
   check('带回「别提工作」的边界（随机三选一）', /^(别提工作。|工作的事这次别说。|别碰正事。)$/.test(prompt.split('\n')[1]), true);
-  check('注入只有三行（感知 ＋ 边界 ＋ 护栏，不再一串规则清单）', prompt.split('\n').length, 3);
+  check('注入 3~4 行（感知 ＋ 边界 ＋ 护栏；有最近话题时多一行防重复）', [3, 4].includes(prompt.split('\n').length), true);
   check('方案 B 的注入不再要求模型自己分段（分条投递）', prompt.includes(SEGMENT_MARK), false);
   // 抓出来的碎片必须**每次不固定**：换几个时刻 → 文案应该变
   const later = new Date(now.getTime() + 60_000);
