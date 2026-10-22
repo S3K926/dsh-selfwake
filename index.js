@@ -445,8 +445,12 @@ export function evaluateGates(now, cfg, state, lastActivityMs) {
     return { fire: false, why: '读不到用户活动时间（保守不开）' };
   }
   const idle = now.getTime() - lastActivityMs;
-  if (idle < cfg.minIdleMinutes * 60_000) {
-    return { fire: false, why: `使用者 ${Math.round(idle / 60_000)} 分钟前还在说话（要安静 ≥${cfg.minIdleMinutes} 分钟）` };
+  // 2026-10-21 加（评审提的"开口时间太规律"）：空闲阈值也带可复现抖动（±20%）。
+  // 只抖间隔的话，间隔早过完、人一停够点，下个 tick 就开 —— 每次都踩在差不多的时间点。
+  const idleJitter = 0.8 + hashUnit(`${state.sessionKey ?? ''}|idle|${state.firedCount ?? 0}`) * 0.4;
+  const idleNeedMs = cfg.minIdleMinutes * 60_000 * idleJitter;
+  if (idle < idleNeedMs) {
+    return { fire: false, why: `使用者 ${Math.round(idle / 60_000)} 分钟前还在说话（要安静 ≥${Math.round(idleNeedMs / 60_000)} 分钟）` };
   }
   if ((state.unanswered ?? 0) >= cfg.maxUnanswered) {
     return { fire: false, why: `连着 ${state.unanswered} 次没回（上限 ${cfg.maxUnanswered}）` };
